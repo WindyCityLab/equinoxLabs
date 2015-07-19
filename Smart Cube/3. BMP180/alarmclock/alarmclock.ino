@@ -1,6 +1,3 @@
-
-
-
 #include <Wire.h>
 #include "RTClib.h"
 #include <LiquidCrystal.h>
@@ -8,23 +5,15 @@
 #include <Adafruit_VS1053.h>
 #include <SD.h>
 #include <ZX_Sensor.h>
-//#include <SFE_BMP180.h>
+#include <SFE_BMP180.h>
 
-
+//ZX SENSOR
 const int ZX_ADDR = 0x10;  // ZX Sensor I2C address
 ZX_Sensor zx_sensor = ZX_Sensor(ZX_ADDR);
 uint8_t x_pos;
 uint8_t z_pos;
 
-//  #include <SoftwareSerial.h>
-
-//#include "Adafruit_BLE.h"
-//#include "Adafruit_BluefruitLE_SPI.h"
-//#include "Adafruit_BluefruitLE_UART.h"
-////#include "BluefruitConfig.h"
-
-//Adafruit_BluefruitLE_SPI ble(1, 2, 3);
-
+//MUSIC MAKER SHIELD
 #define CARDCS 4     // Card chip select pin
 // DREQ should be an Int pin, see http://arduino.cc/en/Reference/attachInterrupt
 #define DREQ 3       // VS1053 Data request, ideally an Interrupt pin
@@ -34,10 +23,13 @@ uint8_t z_pos;
 #define SHIELD_DCS    6      // VS1053 Data/command select pin (output)
 #define VOLUME       20
 
-
 Adafruit_VS1053_FilePlayer musicPlayer = Adafruit_VS1053_FilePlayer(SHIELD_RESET, SHIELD_CS, SHIELD_DCS, DREQ, CARDCS);
-//SFE_BMP180 pressure;
 
+//BMP180
+#define BMP_ADDR = 0x77
+SFE_BMP180 bmp;
+
+#define BLE_ADDR = 0x11
 
 bool DKDEBUG = true;
 
@@ -71,7 +63,7 @@ clockState setMode;
 DateTime currentSetTime;
 
 
-const int buzzerPin = 6;
+const int accentLEDPin = 6;
 const int hourPin = 1;
 const int minutePin = 2;
 const int setPin = 3;
@@ -79,7 +71,7 @@ const int snoozePin = 4;
 
 
 
-LiquidCrystal lcd(8,9,17,16,15,14);
+LiquidCrystal lcd(8,9,14,15,16,17);
 
 void setup() 
 {
@@ -96,7 +88,7 @@ void setup()
 //  alarm1 = DateTime(now.year(),now.month(),now.day(),6,0,0);
   alarm2 = DateTime(now.year(),now.month(),now.day(),6,0,0);  
 
-  alarm1Enabled = true;
+  alarm1Enabled = false;
   alarm1 = DateTime(now.unixtime() + 10);
   
 
@@ -106,14 +98,31 @@ void setup()
   lcd.clear();
   
   setupMusicPlayer();
-  
+  setupZXSensor();
+  setupBMP();
+
+
+}
+
+void setupBMP()
+{
+  if(!bmp.begin())
+  {
+    /* There was a problem detecting the BMP085 ... check your connections */
+    Serial.print("Ooops, no BMP085 detected ... Check your wiring or I2C ADDR!");
+    while(1);
+  }
+
+}
+
+void setupZXSensor() 
+{
   // Initialize ZX Sensor (configure I2C and read model ID)
   if ( zx_sensor.init() ) {
     Serial.println("ZX Sensor initialization complete");
   } else {
     Serial.println("Something went wrong during ZX Sensor init!");
   }
-
 
 }
 
@@ -124,7 +133,7 @@ void setupMusicPlayer()
      while (1);
      
   }
-  musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
+//  musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
   if (!SD.begin(CARDCS)) {
     Serial.println(F("SD failed, or not present"));
     while (1);  // don't do anything more
@@ -140,14 +149,16 @@ void setupMusicPlayer()
   musicPlayer.GPIO_pinMode(minutePin, INPUT);
   musicPlayer.GPIO_pinMode(setPin, INPUT);
   musicPlayer.GPIO_pinMode(snoozePin, INPUT);
-  musicPlayer.GPIO_pinMode(buzzerPin, OUTPUT);
+  musicPlayer.GPIO_pinMode(accentLEDPin, OUTPUT);
+  
+  
+  musicPlayer.GPIO_digitalWrite(accentLEDPin, HIGH);
 
 
 }
 
 void loop() 
 {
-
     if (setMode == clockStateNormalOperation) //If we're not in set mode
     {      
         if (debounceRead(setPin)) // Lets see if our button is pressed
@@ -168,6 +179,8 @@ void loop()
              monitorSnoozeSensor();
            }
         }
+        
+        updateTemp();
     }else //We're in set mode.
     {
       blinkDisplay();
@@ -187,6 +200,51 @@ void loop()
          } 
        }
     }
+}
+
+void updateTemp()
+{
+   static long lastUpdate;
+  if (millis() - lastUpdate > 5000)
+  {
+  lastUpdate = millis();
+
+  lcd.setCursor(11,0);
+  lcd.print(getTemp(),1);
+  lcd.print(F("F"));
+  }
+}
+
+double getTemp()
+{
+  
+  char status;
+  double T;
+  status = bmp.startTemperature();
+  if (status != 0)
+  {
+    // Wait for the measurement to complete:
+    delay(status);
+
+    // Retrieve the completed temperature measurement:
+    // Note that the measurement is stored in the variable T.
+    // Function returns 1 if successful, 0 if failure.
+
+    status = bmp.getTemperature(T);
+    if (status != 0)
+    {
+      // Print out the measurement:
+      Serial.print("temperature: ");
+      Serial.print(T,2);
+      Serial.print(" deg C, ");
+      double F = (9.0/5.0)*T+32;
+      Serial.print(F,2);
+
+      return F;
+    }
+  }    
+ 
+ return 0;
 }
 
 void setRTCTime()
@@ -464,12 +522,12 @@ void stopSong()
 
 void alarmActiveLEDOn() 
 {
-  musicPlayer.GPIO_digitalWrite(buzzerPin, HIGH);
+  musicPlayer.GPIO_digitalWrite(accentLEDPin, HIGH);
 }
 
 void alarmActiveLEDOff() 
 {
-  musicPlayer.GPIO_digitalWrite(buzzerPin, LOW);
+  musicPlayer.GPIO_digitalWrite(accentLEDPin, LOW);
 }
 
 void snoozeHit() 
@@ -487,8 +545,7 @@ void snoozeHit()
     alarm2SnoozeTime = now.unixtime() + snoozeAmount;
   }
 
-  stopAlarm();
-  
+  stopAlarm();  
   
 }
 

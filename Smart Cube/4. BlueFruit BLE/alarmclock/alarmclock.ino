@@ -1,6 +1,3 @@
-
-
-
 #include <Wire.h>
 #include "RTClib.h"
 #include <LiquidCrystal.h>
@@ -8,23 +5,15 @@
 #include <Adafruit_VS1053.h>
 #include <SD.h>
 #include <ZX_Sensor.h>
-//#include <SFE_BMP180.h>
+#include <SFE_BMP180.h>
 
-
+//ZX SENSOR
 const int ZX_ADDR = 0x10;  // ZX Sensor I2C address
 ZX_Sensor zx_sensor = ZX_Sensor(ZX_ADDR);
 uint8_t x_pos;
 uint8_t z_pos;
 
-//  #include <SoftwareSerial.h>
-
-//#include "Adafruit_BLE.h"
-//#include "Adafruit_BluefruitLE_SPI.h"
-//#include "Adafruit_BluefruitLE_UART.h"
-////#include "BluefruitConfig.h"
-
-//Adafruit_BluefruitLE_SPI ble(1, 2, 3);
-
+//MUSIC MAKER SHIELD
 #define CARDCS 4     // Card chip select pin
 // DREQ should be an Int pin, see http://arduino.cc/en/Reference/attachInterrupt
 #define DREQ 3       // VS1053 Data request, ideally an Interrupt pin
@@ -32,14 +21,17 @@ uint8_t z_pos;
 #define SHIELD_RESET  -1      // VS1053 reset pin (unused!)
 #define SHIELD_CS     7      // VS1053 chip select pin (output)
 #define SHIELD_DCS    6      // VS1053 Data/command select pin (output)
-#define VOLUME       20
-
+int VOLUME =      30;
 
 Adafruit_VS1053_FilePlayer musicPlayer = Adafruit_VS1053_FilePlayer(SHIELD_RESET, SHIELD_CS, SHIELD_DCS, DREQ, CARDCS);
-//SFE_BMP180 pressure;
 
+//BMP180
+#define BMP_ADDR  0x77
+SFE_BMP180 bmp;
 
-bool DKDEBUG = true;
+#define BLE_ADDR  0x50
+
+bool DKDEBUG = false;
 
 RTC_DS1307 rtc;
 
@@ -71,7 +63,7 @@ clockState setMode;
 DateTime currentSetTime;
 
 
-const int buzzerPin = 6;
+const int accentLEDPin = 6;
 const int hourPin = 1;
 const int minutePin = 2;
 const int setPin = 3;
@@ -79,7 +71,7 @@ const int snoozePin = 4;
 
 
 
-LiquidCrystal lcd(8,9,17,16,15,14);
+LiquidCrystal lcd(8,9,14,15,16,17);
 
 void setup() 
 {
@@ -96,7 +88,7 @@ void setup()
 //  alarm1 = DateTime(now.year(),now.month(),now.day(),6,0,0);
   alarm2 = DateTime(now.year(),now.month(),now.day(),6,0,0);  
 
-  alarm1Enabled = true;
+  alarm1Enabled = false;
   alarm1 = DateTime(now.unixtime() + 10);
   
 
@@ -106,14 +98,31 @@ void setup()
   lcd.clear();
   
   setupMusicPlayer();
-  
+  setupZXSensor();
+  setupBMP();
+
+
+}
+
+void setupBMP()
+{
+  if(!bmp.begin())
+  {
+    /* There was a problem detecting the BMP085 ... check your connections */
+    Serial.print("Ooops, no BMP085 detected ... Check your wiring or I2C ADDR!");
+    while(1);
+  }
+
+}
+
+void setupZXSensor() 
+{
   // Initialize ZX Sensor (configure I2C and read model ID)
   if ( zx_sensor.init() ) {
     Serial.println("ZX Sensor initialization complete");
   } else {
     Serial.println("Something went wrong during ZX Sensor init!");
   }
-
 
 }
 
@@ -124,7 +133,7 @@ void setupMusicPlayer()
      while (1);
      
   }
-  musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
+//  musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
   if (!SD.begin(CARDCS)) {
     Serial.println(F("SD failed, or not present"));
     while (1);  // don't do anything more
@@ -133,6 +142,8 @@ void setupMusicPlayer()
 
     printDirectory(SD.open("/"), 0);
   musicPlayer.setVolume(VOLUME,VOLUME);
+  //  musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
+
   if (! musicPlayer.useInterrupt(VS1053_FILEPLAYER_PIN_INT))
     lcd.print("hi, World");
     
@@ -140,14 +151,16 @@ void setupMusicPlayer()
   musicPlayer.GPIO_pinMode(minutePin, INPUT);
   musicPlayer.GPIO_pinMode(setPin, INPUT);
   musicPlayer.GPIO_pinMode(snoozePin, INPUT);
-  musicPlayer.GPIO_pinMode(buzzerPin, OUTPUT);
+  musicPlayer.GPIO_pinMode(accentLEDPin, OUTPUT);
+  
+  
+  musicPlayer.GPIO_digitalWrite(accentLEDPin, HIGH);
 
 
 }
 
 void loop() 
 {
-
     if (setMode == clockStateNormalOperation) //If we're not in set mode
     {      
         if (debounceRead(setPin)) // Lets see if our button is pressed
@@ -168,7 +181,11 @@ void loop()
              monitorSnoozeSensor();
            }
         }
-    }else //We're in set mode.
+        
+        updateTemp();
+        requestDataFromBLE();
+        
+      }else //We're in set mode.
     {
       blinkDisplay();
       updateDisplaySetMode();
@@ -188,6 +205,166 @@ void loop()
        }
     }
 }
+
+void updateTemp()
+{
+   static long lastUpdate;
+  if (millis() - lastUpdate > 5000)
+  {
+  lastUpdate = millis();
+
+  double temp = getTemp();
+  
+  lcd.setCursor(11,0);
+  lcd.print(temp,1);
+  lcd.print(F("F"));
+  
+  writeTempToBLE(temp);
+
+  }
+}
+
+void writeTempToBLE(double temp)
+{
+    uint8_t realNumber = temp;
+  uint8_t decimals = (temp - realNumber) * 100;
+  
+  
+  Serial.print(F("I2C Write: "));
+  Serial.print(F("T"));
+  Serial.print(realNumber, HEX);
+  Serial.print(decimals, HEX);
+  Serial.println();
+  
+  Wire.beginTransmission(BLE_ADDR);
+  Wire.write('T');
+  Wire.write(realNumber);
+  Wire.write(decimals);
+  Wire.endTransmission();
+
+}
+
+double getTemp()
+{
+  
+  char status;
+  double T;
+  status = bmp.startTemperature();
+  if (status != 0)
+  {
+    // Wait for the measurement to complete:
+    delay(status);
+
+    // Retrieve the completed temperature measurement:
+    // Note that the measurement is stored in the variable T.
+    // Function returns 1 if successful, 0 if failure.
+
+    status = bmp.getTemperature(T);
+    if (status != 0)
+    {
+      // Print out the measurement:
+      Serial.print(F("reading temperature: "));
+      double F = (9.0/5.0)*T+32;
+      Serial.print(F,2);
+      Serial.println();
+
+      return F;
+    }
+  }    
+ 
+ return 0;
+}
+
+void requestDataFromBLE()
+{
+     static long lastUpdate;
+  if (millis() - lastUpdate > 1000)
+  {
+    lastUpdate = millis();
+  
+    Wire.requestFrom(BLE_ADDR, 10);    
+    
+    Serial.println(F("READ FROM BLE:"));
+   
+    
+    char commandBuffer[10];
+    int counter = 0;
+    while(Wire.available())    // slave may send less than requested
+    { 
+      char c = Wire.read(); // receive a byte as character
+      commandBuffer[counter] = c;
+//      Serial.print(c,HEX);
+//      Serial.println();
+      
+      counter++;
+    }
+
+  parseCommandBuffer(commandBuffer);
+  
+  }
+  
+}
+
+void parseCommandBuffer(char commandBuffer[10]) 
+{  
+  //Set hour
+   if (commandBuffer[0] == 0x68 ||
+       commandBuffer[0] == 0x48)
+       {
+         int firstDigit = ((commandBuffer[1] - 0x30)*10);
+         int secondDigit = (commandBuffer[2] - 0x30);
+         
+         int hourToSet = firstDigit + secondDigit; 
+         
+         Serial.print("SETHOURTO: ");  
+         Serial.println(hourToSet,DEC);
+        
+         
+       }
+    //SET MINUTE
+    if (commandBuffer[0] == 0x4D ||
+       commandBuffer[0] == 0x6D)
+       {
+         int firstDigit = ((commandBuffer[1] - 0x30)*10);
+         int secondDigit = (commandBuffer[2] - 0x30);
+         
+         int minuteToSet = firstDigit + secondDigit; 
+         
+         Serial.print("SETMINUTE: ");  
+         Serial.println(minuteToSet,DEC);
+       }
+    
+    if (commandBuffer[0] == 0x50 ||
+       commandBuffer[0] == 0x70)
+       {
+         playSong();
+         Serial.print("PLAY MUSIC!");  
+       }
+    if (commandBuffer[0] == 0x78 ||
+       commandBuffer[0] == 0x58)
+       {
+         stopSong();
+         Serial.print("stop MUSIC!");  
+       }
+      
+    if (commandBuffer[0] == 0x75 ||
+       commandBuffer[0] == 0x55)
+       {
+        increaseVolume();
+         Serial.print("Volume UP!");  
+       }
+      
+    if (commandBuffer[0] == 0x44 ||
+       commandBuffer[0] == 0x64)
+       {
+        decreaseVolume();
+         Serial.print("Volume DOWN!");  
+       }
+    
+
+}
+
+
 
 void setRTCTime()
 {
@@ -381,7 +558,7 @@ void monitorSnoozeSensor()
   if ( zx_sensor.positionAvailable() ) {
     z_pos = zx_sensor.readZ();
     if ( z_pos != ZX_ERROR ) {
-      Serial.print(" Z: ");
+      Serial.print(F(" Z: "));
       Serial.println(z_pos);
       
       if (z_pos < 10)
@@ -461,15 +638,36 @@ void stopSong()
   musicPlayer.stopPlaying();
 }
 
+void increaseVolume() 
+{
+  if (VOLUME == 0){
+//      musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
+      return;
+  }
+    VOLUME -= 10;
+    musicPlayer.setVolume(VOLUME,VOLUME);
+}
+
+void decreaseVolume()
+{
+  if (VOLUME == 240)
+  {
+    return;
+  }
+      VOLUME += 10;
+    musicPlayer.setVolume(VOLUME,VOLUME);
+
+}
+
 
 void alarmActiveLEDOn() 
 {
-  musicPlayer.GPIO_digitalWrite(buzzerPin, HIGH);
+  musicPlayer.GPIO_digitalWrite(accentLEDPin, HIGH);
 }
 
 void alarmActiveLEDOff() 
 {
-  musicPlayer.GPIO_digitalWrite(buzzerPin, LOW);
+  musicPlayer.GPIO_digitalWrite(accentLEDPin, LOW);
 }
 
 void snoozeHit() 
@@ -487,8 +685,7 @@ void snoozeHit()
     alarm2SnoozeTime = now.unixtime() + snoozeAmount;
   }
 
-  stopAlarm();
-  
+  stopAlarm();  
   
 }
 
@@ -556,26 +753,26 @@ void writeAlarmsStatus()
   {  
     if(alarm1Active)
     {
-      lcd.print("*");
+      lcd.print(F("*"));
     }
     writeTimeOnDisplay(alarm1,false,0,1);  
   }
   else 
   {
-    lcd.print("--:-- ");
+    lcd.print(F("--:-- "));
   }
   lcd.setCursor(10,1);
   if (alarm2Enabled) 
   {
     if(alarm2Active)
     {
-      lcd.print("*");
+      lcd.print(F("*"));
     }
     writeTimeOnDisplay(alarm2,false,10,1);  
   }  
   else 
   {
-    lcd.print("--:-- ");
+    lcd.print(F("--:-- "));
   }
 }
 
@@ -634,11 +831,11 @@ void writeTimeOnDisplay(DateTime time, bool withSeconds, int atCharacterIndex, i
     
     if (isAM)
     {
-      lcd.print("A");
+      lcd.print(F("A"));
     }
     else
   {
-      lcd.print("P");
+      lcd.print(F("P"));
   }
 }  
 
