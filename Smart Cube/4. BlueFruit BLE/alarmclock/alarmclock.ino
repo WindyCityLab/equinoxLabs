@@ -22,6 +22,7 @@ uint8_t z_pos;
 #define SHIELD_CS     7      // VS1053 chip select pin (output)
 #define SHIELD_DCS    6      // VS1053 Data/command select pin (output)
 int VOLUME =      30;
+int currentTrack = 1;
 
 Adafruit_VS1053_FilePlayer musicPlayer = Adafruit_VS1053_FilePlayer(SHIELD_RESET, SHIELD_CS, SHIELD_DCS, DREQ, CARDCS);
 
@@ -31,7 +32,7 @@ SFE_BMP180 bmp;
 
 #define BLE_ADDR  0x50
 
-bool DKDEBUG = false;
+bool DKDEBUG = true;
 
 RTC_DS1307 rtc;
 
@@ -119,9 +120,9 @@ void setupZXSensor()
 {
   // Initialize ZX Sensor (configure I2C and read model ID)
   if ( zx_sensor.init() ) {
-    Serial.println("ZX Sensor initialization complete");
+    Serial.println(F("ZX Sensor initialization complete"));
   } else {
-    Serial.println("Something went wrong during ZX Sensor init!");
+    Serial.println(F("Something went wrong during ZX Sensor init!"));
   }
 
 }
@@ -138,14 +139,14 @@ void setupMusicPlayer()
     Serial.println(F("SD failed, or not present"));
     while (1);  // don't do anything more
   }
-  Serial.println("SD OK!");
+  Serial.println(F("SD OK!"));
 
     printDirectory(SD.open("/"), 0);
   musicPlayer.setVolume(VOLUME,VOLUME);
   //  musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
 
   if (! musicPlayer.useInterrupt(VS1053_FILEPLAYER_PIN_INT))
-    lcd.print("hi, World");
+    lcd.print(F("hi, World"));
     
   musicPlayer.GPIO_pinMode(hourPin, INPUT);
   musicPlayer.GPIO_pinMode(minutePin, INPUT);
@@ -168,7 +169,7 @@ void loop()
           setMode = clockStateSetTime; // If it is, we're in set mode now
           currentSetTime = rtc.now();
           lcd.clear();
-          Serial.println("now in set mode");
+          Serial.println(F("now in set mode"));
         }
         else // if its not, carry on
         {
@@ -316,10 +317,12 @@ void parseCommandBuffer(char commandBuffer[10])
          
          int hourToSet = firstDigit + secondDigit; 
          
-         Serial.print("SETHOURTO: ");  
+         Serial.print(F("SETHOURTO: "));  
          Serial.println(hourToSet,DEC);
         
-         
+        DateTime now = rtc.now();
+        currentSetTime = DateTime(now.year(),now.month(),now.day(),hourToSet,now.minute(),now.second());  
+        setRTCTime();
        }
     //SET MINUTE
     if (commandBuffer[0] == 0x4D ||
@@ -332,34 +335,64 @@ void parseCommandBuffer(char commandBuffer[10])
          
          Serial.print("SETMINUTE: ");  
          Serial.println(minuteToSet,DEC);
+         
+        DateTime now = rtc.now();
+        currentSetTime = DateTime(now.year(),now.month(),now.day(),now.hour(),minuteToSet,now.second());  
+        setRTCTime();
+
+       }
+       
+    
+    if (commandBuffer[0] == 0x61 ||
+       commandBuffer[0] == 0x41)
+       {
+         if (commandBuffer[1] == 0x31)
+         {
+           alarm1Enabled = !alarm1Enabled;
+           if (!alarm1Enabled && alarm1Active){
+             stopAlarm();
+           }
+         }
+         
+         
+         if (commandBuffer[1] == 0x32)
+         {
+           alarm2Enabled = !alarm2Enabled;
+           if (!alarm2Enabled && alarm2Active){
+             stopAlarm();
+           }
+
+         }
+         
        }
     
     if (commandBuffer[0] == 0x50 ||
        commandBuffer[0] == 0x70)
        {
          playSong();
-         Serial.print("PLAY MUSIC!");  
+         Serial.print(F("PLAY MUSIC!"));  
        }
     if (commandBuffer[0] == 0x78 ||
        commandBuffer[0] == 0x58)
        {
          stopSong();
-         Serial.print("stop MUSIC!");  
+         Serial.print(F("stop MUSIC!"));  
        }
       
     if (commandBuffer[0] == 0x75 ||
        commandBuffer[0] == 0x55)
        {
         increaseVolume();
-         Serial.print("Volume UP!");  
+         Serial.print(F("Volume UP!"));  
        }
       
     if (commandBuffer[0] == 0x44 ||
        commandBuffer[0] == 0x64)
        {
         decreaseVolume();
-         Serial.print("Volume DOWN!");  
+         Serial.print(F("Volume DOWN!"));  
        }
+    
     
 
 }
@@ -630,6 +663,14 @@ void stopAlarm()
 }
 void playSong() 
 {
+// const char* songToPlay = "track00" + currentTrack ;
+//  const char* mp3Extension = ".mp3";
+//  char combined[32] = {0};
+//strcat(combined, songToPlay);
+//strcat(combined, mp3Extension);
+
+  
+  
   musicPlayer.startPlayingFile("track001.mp3");
 }
 
@@ -673,7 +714,7 @@ void alarmActiveLEDOff()
 void snoozeHit() 
 {
   DateTime now = rtc.now();
-  Serial.println("SNOOZING");
+  Serial.println(F("SNOOZING"));
   if (alarm1Active)
   {
     alarm1Active = false;
@@ -854,7 +895,7 @@ void printDirectory(File dir, int numTabs) {
      }
      Serial.print(entry.name());
      if (entry.isDirectory()) {
-       Serial.println("/");
+       Serial.println(F("/"));
        printDirectory(entry, numTabs+1);
      } else {
        // files have sizes, directories do not
